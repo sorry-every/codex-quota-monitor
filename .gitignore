@@ -7,6 +7,8 @@ bin/
 obj/
 dist/
 release/
+.installer-staging/
+installer/*.sed
 .vs/
 *.user
 *.suo

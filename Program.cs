@@ -5,6 +5,7 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Globalization;
 using System.IO;
+using Microsoft.Win32;
 using System.Net;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -47,8 +48,22 @@ namespace CodexQuotaMonitor
                 {
                     return;
                 }
-                Application.Run(new MainForm());
+                bool silentStart = HasArgument(args, "--silent");
+                Application.Run(new MainForm(silentStart));
             }
+        }
+
+        private static bool HasArgument(string[] args, string expected)
+        {
+            foreach (string arg in args)
+            {
+                if (string.Equals(arg, expected, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private static void RunDiagnostics(string outputPath)
@@ -122,6 +137,8 @@ namespace CodexQuotaMonitor
         private readonly Label _lastUpdatedLabel;
         private readonly Button _refreshButton;
         private readonly CheckBox _trayToggle;
+        private readonly Button _autoStartButton;
+        private readonly Button _silentStartButton;
         private readonly TextBox _feishuWebhookBox;
         private readonly Label _feishuStatusLabel;
         private readonly Button _saveFeishuButton;
@@ -130,6 +147,8 @@ namespace CodexQuotaMonitor
         private readonly ToolStripMenuItem _menuOpen;
         private readonly ToolStripMenuItem _menuRefresh;
         private readonly ToolStripMenuItem _menuFeishu;
+        private readonly ToolStripMenuItem _menuAutoStart;
+        private readonly ToolStripMenuItem _menuSilentStart;
         private readonly System.Windows.Forms.Timer _refreshTimer;
 
         private CodexDataService _dataService;
@@ -137,9 +156,12 @@ namespace CodexQuotaMonitor
         private bool _isRefreshing;
         private bool _allowExit;
         private bool _shownBackgroundNotice;
+        private bool _updatingStartupSettings;
+        private readonly bool _silentStart;
 
-        public MainForm()
+        public MainForm(bool silentStart)
         {
+            _silentStart = silentStart;
             Text = "Codex Quota";
             Font = _uiFont;
             BackColor = _pageColor;
@@ -151,6 +173,7 @@ namespace CodexQuotaMonitor
             MaximizeBox = false;
             StartPosition = FormStartPosition.CenterScreen;
             AutoScaleMode = AutoScaleMode.Dpi;
+            Opacity = _silentStart ? 0D : 1D;
 
             Panel header = new Panel();
             header.BackColor = _cardColor;
@@ -240,11 +263,31 @@ namespace CodexQuotaMonitor
             _trayToggle.CheckedChanged += OnTrayToggleChanged;
             settings.Controls.Add(_trayToggle);
 
+            _autoStartButton = CreateStartupButton(
+                StartupSettings.IsEnabled() ? "开机自启：已开启" : "开机自启：未开启",
+                new Point(18, 40),
+                new Size(130, 34));
+            _autoStartButton.Click += delegate
+            {
+                ApplyStartupSettings(!StartupSettings.IsEnabled(), StartupSettings.ReadSilentStart());
+            };
+            settings.Controls.Add(_autoStartButton);
+
+            _silentStartButton = CreateStartupButton(
+                StartupSettings.ReadSilentStart() ? "静默启动：已开启" : "静默启动：未开启",
+                new Point(154, 40),
+                new Size(128, 34));
+            _silentStartButton.Click += delegate
+            {
+                ApplyStartupSettings(StartupSettings.IsEnabled(), !StartupSettings.ReadSilentStart());
+            };
+            settings.Controls.Add(_silentStartButton);
+
             _planLabel = new Label();
             _planLabel.Text = "每 1 分钟自动刷新";
             _planLabel.ForeColor = _mutedColor;
             _planLabel.AutoSize = true;
-            _planLabel.Location = new Point(18, 38);
+            _planLabel.Location = new Point(18, 76);
             settings.Controls.Add(_planLabel);
 
             _refreshButton = new Button();
@@ -260,11 +303,11 @@ namespace CodexQuotaMonitor
             feishuTitle.Text = "完成任务后通知飞书";
             feishuTitle.Font = _smallBoldFont;
             feishuTitle.AutoSize = true;
-            feishuTitle.Location = new Point(18, 78);
+            feishuTitle.Location = new Point(18, 99);
             settings.Controls.Add(feishuTitle);
 
             _feishuWebhookBox = new TextBox();
-            _feishuWebhookBox.Location = new Point(18, 105);
+            _feishuWebhookBox.Location = new Point(18, 120);
             _feishuWebhookBox.Size = new Size(354, 28);
             _feishuWebhookBox.Font = new Font("Consolas", 9F);
             _feishuWebhookBox.UseSystemPasswordChar = true;
@@ -274,7 +317,7 @@ namespace CodexQuotaMonitor
             _saveFeishuButton.Text = "保存并启用";
             _saveFeishuButton.FlatStyle = FlatStyle.Flat;
             _saveFeishuButton.FlatAppearance.BorderColor = Color.FromArgb(199, 207, 219);
-            _saveFeishuButton.Location = new Point(18, 143);
+            _saveFeishuButton.Location = new Point(18, 156);
             _saveFeishuButton.Size = new Size(110, 34);
             _saveFeishuButton.Click += SaveFeishuSettings;
             settings.Controls.Add(_saveFeishuButton);
@@ -283,7 +326,7 @@ namespace CodexQuotaMonitor
             _testFeishuButton.Text = "发送测试";
             _testFeishuButton.FlatStyle = FlatStyle.Flat;
             _testFeishuButton.FlatAppearance.BorderColor = Color.FromArgb(199, 207, 219);
-            _testFeishuButton.Location = new Point(140, 143);
+            _testFeishuButton.Location = new Point(140, 156);
             _testFeishuButton.Size = new Size(95, 34);
             _testFeishuButton.Click += SendFeishuTestAsync;
             settings.Controls.Add(_testFeishuButton);
@@ -292,7 +335,7 @@ namespace CodexQuotaMonitor
             _feishuStatusLabel.Text = "可选：配置后，Codex 完成或失败时会发送通知。";
             _feishuStatusLabel.ForeColor = _mutedColor;
             _feishuStatusLabel.AutoEllipsis = true;
-            _feishuStatusLabel.Location = new Point(18, 184);
+            _feishuStatusLabel.Location = new Point(18, 196);
             _feishuStatusLabel.Size = new Size(354, 24);
             settings.Controls.Add(_feishuStatusLabel);
 
@@ -319,6 +362,18 @@ namespace CodexQuotaMonitor
             _menuRefresh = new ToolStripMenuItem("立即刷新");
             _menuRefresh.Click += delegate { RefreshQuotaAsync(); };
             trayMenu.Items.Add(_menuRefresh);
+            _menuAutoStart = new ToolStripMenuItem("开机自动启动");
+            _menuAutoStart.Click += delegate
+            {
+                ApplyStartupSettings(!StartupSettings.IsEnabled(), StartupSettings.ReadSilentStart());
+            };
+            trayMenu.Items.Add(_menuAutoStart);
+            _menuSilentStart = new ToolStripMenuItem("静默启动（仅托盘）");
+            _menuSilentStart.Click += delegate
+            {
+                ApplyStartupSettings(StartupSettings.IsEnabled(), !StartupSettings.ReadSilentStart());
+            };
+            trayMenu.Items.Add(_menuSilentStart);
             _menuFeishu = new ToolStripMenuItem("飞书通知设置");
             _menuFeishu.Click += delegate { ShowFeishuSettings(); };
             trayMenu.Items.Add(_menuFeishu);
@@ -333,6 +388,7 @@ namespace CodexQuotaMonitor
             _notifyIcon.Visible = true;
             _notifyIcon.DoubleClick += delegate { ShowWindow(); };
             UpdateTrayIcon(null);
+            UpdateStartupControls();
 
             _refreshTimer = new System.Windows.Forms.Timer();
             _refreshTimer.Interval = 60 * 1000;
@@ -340,7 +396,18 @@ namespace CodexQuotaMonitor
             _refreshTimer.Start();
 
             _dataService = new CodexDataService();
-            Shown += delegate { RefreshQuotaAsync(); };
+            Shown += delegate
+            {
+                RefreshQuotaAsync();
+                if (_silentStart)
+                {
+                    BeginInvoke(new Action(delegate
+                    {
+                        HideToTray(false);
+                        Opacity = 1D;
+                    }));
+                }
+            };
             FormClosing += OnFormClosing;
             Resize += OnResize;
         }
@@ -509,6 +576,7 @@ namespace CodexQuotaMonitor
 
         private void ShowWindow()
         {
+            Opacity = 1D;
             Show();
             WindowState = FormWindowState.Normal;
             Activate();
@@ -532,11 +600,64 @@ namespace CodexQuotaMonitor
             _notifyIcon.Visible = _trayToggle.Checked;
         }
 
+        private Button CreateStartupButton(string text, Point location, Size size)
+        {
+            Button button = new Button();
+            button.Text = text;
+            button.FlatStyle = FlatStyle.Flat;
+            button.FlatAppearance.BorderColor = Color.FromArgb(199, 207, 219);
+            button.Location = location;
+            button.Size = size;
+            button.Font = _uiFont;
+            return button;
+        }
+
+        private void ApplyStartupSettings(bool autoStart, bool silentStart)
+        {
+            if (_updatingStartupSettings)
+            {
+                return;
+            }
+
+            try
+            {
+                StartupSettings.Apply(autoStart, silentStart);
+                UpdateStartupControls();
+                string message = autoStart
+                    ? (silentStart ? "已开启开机自启和静默启动。" : "已开启开机自启。")
+                    : "已关闭开机自启。";
+                _notifyIcon.ShowBalloonTip(2200, "启动设置已更新", message, ToolTipIcon.Info);
+            }
+            catch (Exception ex)
+            {
+                UpdateStartupControls();
+                _notifyIcon.ShowBalloonTip(3000, "启动设置保存失败", ShortenError(ex.Message), ToolTipIcon.Error);
+            }
+        }
+
+        private void UpdateStartupControls()
+        {
+            _updatingStartupSettings = true;
+            try
+            {
+                bool autoStart = StartupSettings.IsEnabled();
+                bool silentStart = StartupSettings.ReadSilentStart();
+                _autoStartButton.Text = autoStart ? "开机自启：已开启" : "开机自启：未开启";
+                _silentStartButton.Text = silentStart ? "静默启动：已开启" : "静默启动：未开启";
+                _menuAutoStart.Checked = autoStart;
+                _menuSilentStart.Checked = silentStart;
+            }
+            finally
+            {
+                _updatingStartupSettings = false;
+            }
+        }
+
         private void OnResize(object sender, EventArgs e)
         {
             if (WindowState == FormWindowState.Minimized)
             {
-                HideToTray();
+                HideToTray(true);
             }
         }
 
@@ -545,14 +666,14 @@ namespace CodexQuotaMonitor
             if (!_allowExit && e.CloseReason == CloseReason.UserClosing)
             {
                 e.Cancel = true;
-                HideToTray();
+                HideToTray(true);
             }
         }
 
-        private void HideToTray()
+        private void HideToTray(bool showNotice)
         {
             Hide();
-            if (!_shownBackgroundNotice && _notifyIcon.Visible)
+            if (showNotice && !_shownBackgroundNotice && _notifyIcon.Visible)
             {
                 _shownBackgroundNotice = true;
                 _notifyIcon.BalloonTipTitle = "Codex Quota 仍在运行";
@@ -1000,6 +1121,82 @@ namespace CodexQuotaMonitor
             }
 
             return string.Join(Environment.NewLine, kept).TrimStart();
+        }
+    }
+
+    internal static class StartupSettings
+    {
+        private const string RunKeyPath = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+        private const string RunValueName = "CodexQuotaMonitor";
+        private static readonly JavaScriptSerializer Serializer = new JavaScriptSerializer();
+        private static readonly string ConfigDirectory =
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "CodexQuotaMonitor");
+        private static readonly string SettingsPath = Path.Combine(ConfigDirectory, "settings.json");
+
+        public static bool IsEnabled()
+        {
+            try
+            {
+                using (RegistryKey key = Registry.CurrentUser.OpenSubKey(RunKeyPath, false))
+                {
+                    return key != null && key.GetValue(RunValueName) != null;
+                }
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        public static bool ReadSilentStart()
+        {
+            try
+            {
+                if (!File.Exists(SettingsPath))
+                {
+                    return false;
+                }
+
+                Dictionary<string, object> settings =
+                    Serializer.DeserializeObject(File.ReadAllText(SettingsPath, Encoding.UTF8)) as Dictionary<string, object>;
+                object rawValue;
+                if (settings != null && settings.TryGetValue("silentStart", out rawValue))
+                {
+                    return Convert.ToBoolean(rawValue, CultureInfo.InvariantCulture);
+                }
+            }
+            catch
+            {
+            }
+
+            return false;
+        }
+
+        public static void Apply(bool autoStart, bool silentStart)
+        {
+            using (RegistryKey key = Registry.CurrentUser.CreateSubKey(RunKeyPath))
+            {
+                if (key == null)
+                {
+                    throw new InvalidOperationException("无法打开 Windows 开机启动设置。");
+                }
+
+                if (autoStart)
+                {
+                    string executablePath = Process.GetCurrentProcess().MainModule.FileName;
+                    string command = "\"" + executablePath + "\"" + (silentStart ? " --silent" : "");
+                    key.SetValue(RunValueName, command, RegistryValueKind.String);
+                }
+                else
+                {
+                    key.DeleteValue(RunValueName, false);
+                }
+            }
+
+            Directory.CreateDirectory(ConfigDirectory);
+            Dictionary<string, object> settings = new Dictionary<string, object>();
+            settings["silentStart"] = silentStart;
+            File.WriteAllText(SettingsPath, Serializer.Serialize(settings), new UTF8Encoding(false));
         }
     }
 
