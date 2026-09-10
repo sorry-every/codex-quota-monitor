@@ -1,0 +1,12 @@
+*.exe
+*.zip
+*.log
+*.json
+!app.manifest
+bin/
+obj/
+dist/
+release/
+.vs/
+*.user
+*.suo
