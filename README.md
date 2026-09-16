@@ -10,13 +10,14 @@
 - 每分钟自动刷新，也支持手动刷新。
 - 关闭主窗口后继续驻留托盘，右键可以打开、刷新或退出。
 - 主界面提供“开机自启”和“静默启动”按钮，托盘右键菜单也可以修改这两个设置。
+- 主界面和托盘右键菜单中的“托盘显示额度”支持自动显示最低、固定显示 5 小时、固定显示每周额度；选择立即生效并在重启后保留。主窗口与托盘显示同一周期，悬停提示包含周期名称。选定周期缺失时显示暂不可用，不切换到其他周期。
 - 自动识别 Codex CLI 和 Codex 桌面版安装路径。
 - 可选配置飞书机器人，在 Codex 任务完成后发送通知。
 
 ## 使用方法
 
 1. 先安装 Codex，并在当前 Windows 用户下登录 ChatGPT 账号。
-2. 从 GitHub Releases 下载 `CodexQuotaMonitor-0.2.0-Setup.exe` 并运行安装程序。
+2. 从 GitHub Releases 下载 `CodexQuotaMonitor-0.3.0-Setup.exe` 并运行安装程序。
 3. 安装完成后，可以从开始菜单或桌面快捷方式启动。
 4. 关闭主窗口后，程序会继续运行在 Windows 通知区域。
 
@@ -97,7 +98,7 @@ CodexQuotaMonitor.exe
 安装程序输出到：
 
 ```text
-release\CodexQuotaMonitor-0.2.0-Setup.exe
+release\CodexQuotaMonitor-0.3.0-Setup.exe
 ```
 
 安装为当前用户目录，不需要管理员权限；卸载入口位于 Windows 的“应用和功能”列表中。

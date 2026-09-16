@@ -5,7 +5,7 @@ $projectRoot = Split-Path -Parent $installerRoot
 $releaseDir = Join-Path $projectRoot "release"
 $stagingDir = Join-Path $projectRoot ".installer-staging"
 $sedPath = Join-Path $installerRoot "CodexQuotaMonitor.sed"
-$outputPath = Join-Path $releaseDir "CodexQuotaMonitor-0.2.0-Setup.exe"
+$outputPath = Join-Path $releaseDir "CodexQuotaMonitor-0.3.0-Setup.exe"
 $iexpressPath = Join-Path $env:WINDIR "System32\iexpress.exe"
 
 if (-not (Test-Path -LiteralPath $iexpressPath)) {

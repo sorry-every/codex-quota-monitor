@@ -158,6 +158,13 @@ namespace CodexQuotaMonitor
         private bool _shownBackgroundNotice;
         private bool _updatingStartupSettings;
         private readonly bool _silentStart;
+        private readonly ComboBox _quotaModeBox;
+        private readonly ToolStripMenuItem[] _quotaModeItems = new ToolStripMenuItem[3];
+        private string _quotaMode = StartupSettings.ReadQuotaMode();
+        private bool _syncingQuotaMode;
+        private QuotaSnapshot _lastSnapshot;
+        private static readonly string[] QuotaModes = { "auto", "fiveHour", "weekly" };
+        private static readonly string[] QuotaModeLabels = { "自动显示最低额度", "固定显示 5 小时额度", "固定显示每周额度" };
 
         public MainForm(bool silentStart)
         {
@@ -166,9 +173,9 @@ namespace CodexQuotaMonitor
             Font = _uiFont;
             BackColor = _pageColor;
             ForeColor = _textColor;
-            ClientSize = new Size(430, 760);
-            MinimumSize = new Size(446, 799);
-            MaximumSize = new Size(446, 799);
+            ClientSize = new Size(430, 804);
+            MinimumSize = new Size(446, 843);
+            MaximumSize = new Size(446, 843);
             FormBorderStyle = FormBorderStyle.FixedSingle;
             MaximizeBox = false;
             StartPosition = FormStartPosition.CenterScreen;
@@ -252,7 +259,7 @@ namespace CodexQuotaMonitor
             settings.BackColor = _cardColor;
             settings.BorderColor = Color.FromArgb(226, 231, 239);
             settings.Location = new Point(20, 484);
-            settings.Size = new Size(390, 220);
+            settings.Size = new Size(390, 264);
             Controls.Add(settings);
 
             _trayToggle = new CheckBox();
@@ -339,11 +346,29 @@ namespace CodexQuotaMonitor
             _feishuStatusLabel.Size = new Size(354, 24);
             settings.Controls.Add(_feishuStatusLabel);
 
+            // Dedicated row keeps the quota selector clear of existing controls.
+            Label quotaModeLabel = new Label();
+            quotaModeLabel.Text = "托盘显示额度";
+            quotaModeLabel.Location = new Point(18, 229);
+            quotaModeLabel.Size = new Size(100, 24);
+            settings.Controls.Add(quotaModeLabel);
+            _quotaModeBox = new ComboBox();
+            _quotaModeBox.DropDownStyle = ComboBoxStyle.DropDownList;
+            _quotaModeBox.Location = new Point(122, 225);
+            _quotaModeBox.Size = new Size(250, 28);
+            _quotaModeBox.Items.AddRange(QuotaModeLabels);
+            _quotaModeBox.SelectedIndexChanged += delegate
+            {
+                if (!_syncingQuotaMode && _quotaModeBox.SelectedIndex >= 0)
+                    ChangeQuotaMode(QuotaModes[_quotaModeBox.SelectedIndex]);
+            };
+            settings.Controls.Add(_quotaModeBox);
+
             _lastUpdatedLabel = new Label();
             _lastUpdatedLabel.Text = "";
             _lastUpdatedLabel.ForeColor = _mutedColor;
             _lastUpdatedLabel.TextAlign = ContentAlignment.MiddleCenter;
-            _lastUpdatedLabel.Location = new Point(20, 712);
+            _lastUpdatedLabel.Location = new Point(20, 756);
             _lastUpdatedLabel.Size = new Size(390, 20);
             Controls.Add(_lastUpdatedLabel);
 
@@ -362,6 +387,16 @@ namespace CodexQuotaMonitor
             _menuRefresh = new ToolStripMenuItem("立即刷新");
             _menuRefresh.Click += delegate { RefreshQuotaAsync(); };
             trayMenu.Items.Add(_menuRefresh);
+            ToolStripMenuItem quotaMenu = new ToolStripMenuItem("托盘显示额度");
+            for (int i = 0; i < QuotaModes.Length; i++)
+            {
+                string mode = QuotaModes[i];
+                _quotaModeItems[i] = new ToolStripMenuItem(QuotaModeLabels[i]);
+                _quotaModeItems[i].Click += delegate { ChangeQuotaMode(mode); };
+                quotaMenu.DropDownItems.Add(_quotaModeItems[i]);
+            }
+            trayMenu.Items.Add(quotaMenu);
+            SyncQuotaModeControls();
             _menuAutoStart = new ToolStripMenuItem("开机自动启动");
             _menuAutoStart.Click += delegate
             {
@@ -452,10 +487,12 @@ namespace CodexQuotaMonitor
             try
             {
                 QuotaSnapshot snapshot = await _dataService.FetchAsync();
-                ApplySnapshot(snapshot);
+                _lastSnapshot = snapshot;
+                DisplaySelectedQuota();
             }
             catch (Exception ex)
             {
+                _lastSnapshot = null;
                 ApplyError(ex.Message);
                 _dataService.Dispose();
                 _dataService = new CodexDataService();
@@ -467,6 +504,42 @@ namespace CodexQuotaMonitor
                 _menuRefresh.Enabled = true;
                 _isRefreshing = false;
             }
+        }
+
+        private void SyncQuotaModeControls()
+        {
+            _syncingQuotaMode = true;
+            try
+            {
+                int index = Array.IndexOf(QuotaModes, _quotaMode);
+                _quotaModeBox.SelectedIndex = index;
+                for (int i = 0; i < _quotaModeItems.Length; i++)
+                    _quotaModeItems[i].Checked = i == index;
+            }
+            finally { _syncingQuotaMode = false; }
+        }
+
+        private void ChangeQuotaMode(string mode)
+        {
+            try
+            {
+                StartupSettings.SaveQuotaMode(mode);
+                _quotaMode = mode;
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, "无法保存额度显示设置：" + ex.Message, "Codex Quota",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            SyncQuotaModeControls();
+            if (_lastSnapshot != null) DisplaySelectedQuota();
+            else RefreshQuotaAsync();
+        }
+
+        private void DisplaySelectedQuota()
+        {
+            try { ApplySnapshot(CodexDataService.SelectSnapshot(_lastSnapshot, _quotaMode)); }
+            catch (InvalidOperationException ex) { ApplyError(ex.Message); }
         }
 
         private void ApplySnapshot(QuotaSnapshot snapshot)
@@ -489,7 +562,7 @@ namespace CodexQuotaMonitor
             _lastUpdatedLabel.Text = "最后更新：" + DateTime.Now.ToString("HH:mm:ss", CultureInfo.CurrentCulture);
 
             UpdateTrayIcon(remaining);
-            SetNotifyText("Codex 剩余额度 " + remaining.ToString(CultureInfo.InvariantCulture) + "% · " + snapshot.Email);
+            SetNotifyText("Codex " + snapshot.WindowLabel + "剩余 " + remaining.ToString(CultureInfo.InvariantCulture) + "% · " + snapshot.Email);
         }
 
         private void ApplyError(string message)
@@ -1194,14 +1267,45 @@ namespace CodexQuotaMonitor
             }
 
             Directory.CreateDirectory(ConfigDirectory);
-            Dictionary<string, object> settings = new Dictionary<string, object>();
+            Dictionary<string, object> settings = ReadSettings();
             settings["silentStart"] = silentStart;
+            File.WriteAllText(SettingsPath, Serializer.Serialize(settings), new UTF8Encoding(false));
+        }
+
+        private static Dictionary<string, object> ReadSettings()
+        {
+            if (!File.Exists(SettingsPath)) return new Dictionary<string, object>();
+            return Serializer.DeserializeObject(File.ReadAllText(SettingsPath, Encoding.UTF8))
+                as Dictionary<string, object> ?? new Dictionary<string, object>();
+        }
+
+        public static string ReadQuotaMode()
+        {
+            try
+            {
+                object value;
+                if (ReadSettings().TryGetValue("quotaDisplayMode", out value))
+                {
+                    string mode = value as string;
+                    if (mode == "fiveHour" || mode == "weekly") return mode;
+                }
+            }
+            catch { }
+            return "auto";
+        }
+
+        public static void SaveQuotaMode(string mode)
+        {
+            Dictionary<string, object> settings = ReadSettings();
+            settings["quotaDisplayMode"] = mode;
+            Directory.CreateDirectory(ConfigDirectory);
             File.WriteAllText(SettingsPath, Serializer.Serialize(settings), new UTF8Encoding(false));
         }
     }
 
     internal sealed class QuotaSnapshot
     {
+        public Dictionary<string, object> Windows { get; set; }
         public string Email { get; set; }
         public string Plan { get; set; }
         public int RemainingPercent { get; set; }
@@ -1234,23 +1338,30 @@ namespace CodexQuotaMonitor
                 throw new InvalidOperationException("Codex 未返回可用的额度信息");
             }
 
-            Dictionary<string, object> selectedWindow = SelectMostRestrictiveWindow(bucket);
-            if (selectedWindow == null)
-            {
-                throw new InvalidOperationException("当前账号没有可显示的额度窗口");
-            }
-
-            int usedPercent = Clamp(ConvertToInt(GetValue(selectedWindow, "usedPercent")), 0, 100);
-            long? resetSeconds = ConvertToNullableLong(GetValue(selectedWindow, "resetsAt"));
-            long? durationMinutes = ConvertToNullableLong(GetValue(selectedWindow, "windowDurationMins"));
-
             QuotaSnapshot snapshot = new QuotaSnapshot();
+            snapshot.Windows = bucket;
             snapshot.Email = Convert.ToString(GetValue(account, "email"), CultureInfo.InvariantCulture);
             if (string.IsNullOrEmpty(snapshot.Email))
             {
                 snapshot.Email = "当前 Codex 账号";
             }
             snapshot.Plan = Convert.ToString(GetValue(account, "planType"), CultureInfo.InvariantCulture);
+            return SelectSnapshot(snapshot, "auto");
+        }
+
+        internal static QuotaSnapshot SelectSnapshot(QuotaSnapshot source, string mode)
+        {
+            Dictionary<string, object> selectedWindow = SelectWindow(source.Windows, mode);
+            if (selectedWindow == null)
+                throw new InvalidOperationException(mode == "auto" ? "当前账号没有可显示的额度窗口"
+                    : (mode == "fiveHour" ? "5 小时额度暂不可用" : "每周额度暂不可用"));
+            int usedPercent = Clamp(ConvertToInt(GetValue(selectedWindow, "usedPercent")), 0, 100);
+            long? resetSeconds = ConvertToNullableLong(GetValue(selectedWindow, "resetsAt"));
+            long? durationMinutes = ConvertToNullableLong(GetValue(selectedWindow, "windowDurationMins"));
+            QuotaSnapshot snapshot = new QuotaSnapshot();
+            snapshot.Windows = source.Windows;
+            snapshot.Email = source.Email;
+            snapshot.Plan = source.Plan;
             snapshot.RemainingPercent = 100 - usedPercent;
             snapshot.ResetsAt = resetSeconds.HasValue ? FromUnixTimeSeconds(resetSeconds.Value) : (DateTime?)null;
             snapshot.WindowLabel = FormatWindow(durationMinutes);
@@ -1281,10 +1392,20 @@ namespace CodexQuotaMonitor
             return GetDictionary(result, "rateLimits");
         }
 
-        private static Dictionary<string, object> SelectMostRestrictiveWindow(Dictionary<string, object> bucket)
+        internal static Dictionary<string, object> SelectWindow(Dictionary<string, object> bucket, string mode)
         {
             Dictionary<string, object> primary = GetDictionary(bucket, "primary");
             Dictionary<string, object> secondary = GetDictionary(bucket, "secondary");
+            if (primary != null && GetValue(primary, "usedPercent") == null) primary = null;
+            if (secondary != null && GetValue(secondary, "usedPercent") == null) secondary = null;
+            if (mode == "fiveHour" || mode == "weekly")
+            {
+                long duration = mode == "fiveHour" ? 300L : 10080L;
+                foreach (Dictionary<string, object> window in new[] { primary, secondary })
+                    if (window != null && ConvertToNullableLong(GetValue(window, "windowDurationMins")) == duration)
+                        return window;
+                return null;
+            }
             if (primary == null)
             {
                 return secondary;
