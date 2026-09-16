@@ -165,6 +165,11 @@ namespace CodexQuotaMonitor
         private QuotaSnapshot _lastSnapshot;
         private static readonly string[] QuotaModes = { "auto", "fiveHour", "weekly" };
         private static readonly string[] QuotaModeLabels = { "自动显示最低额度", "固定显示 5 小时额度", "固定显示每周额度" };
+        private readonly NumericUpDown _refreshSecondsBox;
+        private int _refreshSeconds = StartupSettings.ReadRefreshSeconds();
+        private bool _syncingRefreshInterval;
+        private readonly ToolStripMenuItem[] _intervalItems = new ToolStripMenuItem[5];
+        private static readonly int[] IntervalPresets = { 30, 60, 120, 300, 600 };
 
         public MainForm(bool silentStart)
         {
@@ -173,9 +178,9 @@ namespace CodexQuotaMonitor
             Font = _uiFont;
             BackColor = _pageColor;
             ForeColor = _textColor;
-            ClientSize = new Size(430, 804);
-            MinimumSize = new Size(446, 843);
-            MaximumSize = new Size(446, 843);
+            ClientSize = new Size(430, 844);
+            MinimumSize = new Size(446, 883);
+            MaximumSize = new Size(446, 883);
             FormBorderStyle = FormBorderStyle.FixedSingle;
             MaximizeBox = false;
             StartPosition = FormStartPosition.CenterScreen;
@@ -259,7 +264,7 @@ namespace CodexQuotaMonitor
             settings.BackColor = _cardColor;
             settings.BorderColor = Color.FromArgb(226, 231, 239);
             settings.Location = new Point(20, 484);
-            settings.Size = new Size(390, 264);
+            settings.Size = new Size(390, 304);
             Controls.Add(settings);
 
             _trayToggle = new CheckBox();
@@ -273,7 +278,7 @@ namespace CodexQuotaMonitor
             _autoStartButton = CreateStartupButton(
                 StartupSettings.IsEnabled() ? "开机自启：已开启" : "开机自启：未开启",
                 new Point(18, 40),
-                new Size(130, 34));
+                new Size(128, 34));
             _autoStartButton.Click += delegate
             {
                 ApplyStartupSettings(!StartupSettings.IsEnabled(), StartupSettings.ReadSilentStart());
@@ -291,7 +296,7 @@ namespace CodexQuotaMonitor
             settings.Controls.Add(_silentStartButton);
 
             _planLabel = new Label();
-            _planLabel.Text = "每 1 分钟自动刷新";
+            _planLabel.Text = RefreshIntervalDescription();
             _planLabel.ForeColor = _mutedColor;
             _planLabel.AutoSize = true;
             _planLabel.Location = new Point(18, 76);
@@ -301,8 +306,8 @@ namespace CodexQuotaMonitor
             _refreshButton.Text = "立即刷新";
             _refreshButton.FlatStyle = FlatStyle.Flat;
             _refreshButton.FlatAppearance.BorderColor = Color.FromArgb(199, 207, 219);
-            _refreshButton.Location = new Point(285, 17);
-            _refreshButton.Size = new Size(88, 34);
+            _refreshButton.Location = new Point(290, 40);
+            _refreshButton.Size = new Size(82, 34);
             _refreshButton.Click += delegate { RefreshQuotaAsync(); };
             settings.Controls.Add(_refreshButton);
 
@@ -364,11 +369,28 @@ namespace CodexQuotaMonitor
             };
             settings.Controls.Add(_quotaModeBox);
 
+            Label intervalLabel = new Label();
+            intervalLabel.Text = "刷新间隔（秒）";
+            intervalLabel.Location = new Point(18, 269);
+            intervalLabel.Size = new Size(100, 24);
+            settings.Controls.Add(intervalLabel);
+            _refreshSecondsBox = new NumericUpDown();
+            _refreshSecondsBox.Minimum = 10;
+            _refreshSecondsBox.Maximum = 3600;
+            _refreshSecondsBox.Location = new Point(122, 265);
+            _refreshSecondsBox.Size = new Size(250, 28);
+            _refreshSecondsBox.Value = _refreshSeconds;
+            _refreshSecondsBox.ValueChanged += delegate
+            {
+                if (!_syncingRefreshInterval) ChangeRefreshInterval((int)_refreshSecondsBox.Value);
+            };
+            settings.Controls.Add(_refreshSecondsBox);
+
             _lastUpdatedLabel = new Label();
             _lastUpdatedLabel.Text = "";
             _lastUpdatedLabel.ForeColor = _mutedColor;
             _lastUpdatedLabel.TextAlign = ContentAlignment.MiddleCenter;
-            _lastUpdatedLabel.Location = new Point(20, 756);
+            _lastUpdatedLabel.Location = new Point(20, 796);
             _lastUpdatedLabel.Size = new Size(390, 20);
             Controls.Add(_lastUpdatedLabel);
 
@@ -397,6 +419,18 @@ namespace CodexQuotaMonitor
             }
             trayMenu.Items.Add(quotaMenu);
             SyncQuotaModeControls();
+            ToolStripMenuItem intervalMenu = new ToolStripMenuItem("自动刷新间隔");
+            for (int i = 0; i < IntervalPresets.Length; i++)
+            {
+                int seconds = IntervalPresets[i];
+                _intervalItems[i] = new ToolStripMenuItem(seconds < 60 ? seconds + " 秒" : seconds / 60 + " 分钟");
+                _intervalItems[i].Click += delegate { ChangeRefreshInterval(seconds); };
+                intervalMenu.DropDownItems.Add(_intervalItems[i]);
+            }
+            ToolStripMenuItem customInterval = new ToolStripMenuItem("自定义（10–3600 秒）…");
+            customInterval.Click += delegate { ShowWindow(); _refreshSecondsBox.Focus(); };
+            intervalMenu.DropDownItems.Add(customInterval);
+            trayMenu.Items.Add(intervalMenu);
             _menuAutoStart = new ToolStripMenuItem("开机自动启动");
             _menuAutoStart.Click += delegate
             {
@@ -421,14 +455,18 @@ namespace CodexQuotaMonitor
             _notifyIcon.Text = "Codex Quota · 正在读取额度";
             _notifyIcon.ContextMenuStrip = trayMenu;
             _notifyIcon.Visible = true;
-            _notifyIcon.DoubleClick += delegate { ShowWindow(); };
+            _notifyIcon.MouseClick += delegate(object sender, MouseEventArgs e)
+            {
+                if (e.Button == MouseButtons.Left) ShowWindow();
+            };
             UpdateTrayIcon(null);
             UpdateStartupControls();
 
             _refreshTimer = new System.Windows.Forms.Timer();
-            _refreshTimer.Interval = 60 * 1000;
+            _refreshTimer.Interval = _refreshSeconds * 1000;
             _refreshTimer.Tick += delegate { RefreshQuotaAsync(); };
             _refreshTimer.Start();
+            SyncRefreshIntervalControls();
 
             _dataService = new CodexDataService();
             Shown += delegate
@@ -506,6 +544,42 @@ namespace CodexQuotaMonitor
             }
         }
 
+        private string RefreshIntervalDescription()
+        {
+            return "每 " + (_refreshSeconds % 60 == 0 ? (_refreshSeconds / 60) + " 分钟" : _refreshSeconds + " 秒") + "自动刷新";
+        }
+
+        private void SyncRefreshIntervalControls()
+        {
+            _syncingRefreshInterval = true;
+            try
+            {
+                _refreshSecondsBox.Value = _refreshSeconds;
+                for (int i = 0; i < IntervalPresets.Length; i++)
+                    _intervalItems[i].Checked = IntervalPresets[i] == _refreshSeconds;
+                _planLabel.Text = (_lastSnapshot == null ? "" : FormatPlan(_lastSnapshot.Plan) + " · ") + RefreshIntervalDescription();
+            }
+            finally { _syncingRefreshInterval = false; }
+        }
+
+        private void ChangeRefreshInterval(int seconds)
+        {
+            try
+            {
+                StartupSettings.SaveRefreshSeconds(seconds);
+                _refreshSeconds = seconds;
+                _refreshTimer.Stop();
+                _refreshTimer.Interval = seconds * 1000;
+                _refreshTimer.Start();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, "无法保存刷新间隔：" + ex.Message, "Codex Quota",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            SyncRefreshIntervalControls();
+        }
+
         private void SyncQuotaModeControls()
         {
             _syncingQuotaMode = true;
@@ -558,7 +632,7 @@ namespace CodexQuotaMonitor
             _resetLabel.Text = snapshot.ResetsAt.HasValue
                 ? "重置：" + snapshot.ResetsAt.Value.ToLocalTime().ToString("M月d日 HH:mm", CultureInfo.CurrentCulture)
                 : "重置时间暂不可用";
-            _planLabel.Text = FormatPlan(snapshot.Plan) + " · 每 1 分钟自动刷新";
+            _planLabel.Text = FormatPlan(snapshot.Plan) + " · " + RefreshIntervalDescription();
             _lastUpdatedLabel.Text = "最后更新：" + DateTime.Now.ToString("HH:mm:ss", CultureInfo.CurrentCulture);
 
             UpdateTrayIcon(remaining);
@@ -750,7 +824,7 @@ namespace CodexQuotaMonitor
             {
                 _shownBackgroundNotice = true;
                 _notifyIcon.BalloonTipTitle = "Codex Quota 仍在运行";
-                _notifyIcon.BalloonTipText = "额度将在后台每分钟刷新一次。";
+                _notifyIcon.BalloonTipText = "额度将在后台" + RefreshIntervalDescription() + "。";
                 _notifyIcon.ShowBalloonTip(2500);
             }
         }
@@ -1298,6 +1372,29 @@ namespace CodexQuotaMonitor
         {
             Dictionary<string, object> settings = ReadSettings();
             settings["quotaDisplayMode"] = mode;
+            Directory.CreateDirectory(ConfigDirectory);
+            File.WriteAllText(SettingsPath, Serializer.Serialize(settings), new UTF8Encoding(false));
+        }
+
+        public static int ReadRefreshSeconds()
+        {
+            try
+            {
+                object value;
+                int seconds;
+                if (ReadSettings().TryGetValue("refreshIntervalSeconds", out value)
+                    && int.TryParse(Convert.ToString(value, CultureInfo.InvariantCulture), out seconds)
+                    && seconds >= 10 && seconds <= 3600) return seconds;
+            }
+            catch { }
+            return 60;
+        }
+
+        public static void SaveRefreshSeconds(int seconds)
+        {
+            if (seconds < 10 || seconds > 3600) throw new ArgumentOutOfRangeException("seconds");
+            Dictionary<string, object> settings = ReadSettings();
+            settings["refreshIntervalSeconds"] = seconds;
             Directory.CreateDirectory(ConfigDirectory);
             File.WriteAllText(SettingsPath, Serializer.Serialize(settings), new UTF8Encoding(false));
         }

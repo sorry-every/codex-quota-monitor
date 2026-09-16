@@ -50,6 +50,34 @@ internal static class QuotaSelectionTests
             var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
             var selector = (System.Windows.Forms.ComboBox)typeof(MainForm).GetField("_quotaModeBox", flags).GetValue(form);
             Check(selector.Items.Count == 3 && selector.SelectedIndex >= 0, "Selector initialized");
+            var refresh = (System.Windows.Forms.Button)typeof(MainForm).GetField("_refreshButton", flags).GetValue(form);
+            var autoStart = (System.Windows.Forms.Button)typeof(MainForm).GetField("_autoStartButton", flags).GetValue(form);
+            var silent = (System.Windows.Forms.Button)typeof(MainForm).GetField("_silentStartButton", flags).GetValue(form);
+            Check(refresh.Top == autoStart.Top && refresh.Top == silent.Top, "Action buttons share a baseline");
+            Check(refresh.Height == autoStart.Height && refresh.Height == silent.Height, "Action buttons share a height");
+            Check(!refresh.Bounds.IntersectsWith(silent.Bounds), "Refresh does not overlap silent button");
+            var interval = (System.Windows.Forms.NumericUpDown)typeof(MainForm).GetField("_refreshSecondsBox", flags).GetValue(form);
+            Check(interval.Minimum == 10 && interval.Maximum == 3600, "Custom interval bounds");
+            var timer = (System.Windows.Forms.Timer)typeof(MainForm).GetField("_refreshTimer", flags).GetValue(form);
+            Check(timer.Interval == (int)interval.Value * 1000, "Timer uses saved interval");
+            foreach (System.Windows.Forms.Control control in interval.Parent.Controls)
+                if (control != interval) Check(!control.Bounds.IntersectsWith(interval.Bounds), "Interval overlaps " + control.Text);
+            Check(interval.Bottom <= interval.Parent.ClientSize.Height, "Interval within card");
+            System.IO.Directory.CreateDirectory("release");
+            var pathField = typeof(StartupSettings).GetField("SettingsPath", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+            var originalPath = pathField.GetValue(null);
+            try
+            {
+                pathField.SetValue(null, System.IO.Path.GetFullPath("release/test-settings-" + Guid.NewGuid().ToString("N") + ".json"));
+                StartupSettings.SaveQuotaMode("weekly");
+                typeof(MainForm).GetMethod("ChangeRefreshInterval", flags).Invoke(form, new object[] { 120 });
+                Check(timer.Interval == 120000 && timer.Enabled, "Interval change restarts timer");
+                Check(interval.Value == 120 && StartupSettings.ReadRefreshSeconds() == 120, "Interval control and persistence");
+                Check(StartupSettings.ReadQuotaMode() == "weekly", "Interval preserves quota selection");
+                StartupSettings.SaveQuotaMode("fiveHour");
+                Check(StartupSettings.ReadRefreshSeconds() == 120, "Quota selection preserves interval");
+            }
+            finally { pathField.SetValue(null, originalPath); }
             Check(selector.Bottom <= selector.Parent.ClientSize.Height, "Selector within settings card");
             foreach (System.Windows.Forms.Control control in selector.Parent.Controls)
                 if (control != selector) Check(!control.Bounds.IntersectsWith(selector.Bounds), "Selector overlaps " + control.Text);
