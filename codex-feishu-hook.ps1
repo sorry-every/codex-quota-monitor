@@ -1,5 +1,5 @@
 ﻿# Codex Feishu notification hook for CodexQuotaMonitor.
-# Codex calls this script with one JSON event argument.
+# Codex calls this script with the JSON event as its final command-line argument.
 
 $ErrorActionPreference = "Stop"
 
@@ -20,21 +20,35 @@ function Write-HookLog {
     }
 }
 
-if ($args.Count -lt 1) {
+$rawEvent = ""
+if (-not [string]::IsNullOrWhiteSpace($env:CODEX_QUOTA_TEST_EVENT)) {
+    $rawEvent = $env:CODEX_QUOTA_TEST_EVENT
+} elseif ($args.Count -gt 0) {
+    # On Windows, a long JSON argument can arrive split across argv entries.
+    # Joining preserves the payload while still supporting the normal one-argument case.
+    $rawEvent = [string]::Join(" ", [string[]]$args)
+} else {
+    # Stdin support makes the hook usable with wrappers and older integrations too.
+    try { $rawEvent = [Console]::In.ReadToEnd() } catch { $rawEvent = "" }
+}
+
+if ([string]::IsNullOrWhiteSpace($rawEvent)) {
     Write-HookLog "Codex called hook without an event payload."
     exit 0
 }
 
 try {
-    $event = ([string]$args[0]) | ConvertFrom-Json
+    $event = $rawEvent | ConvertFrom-Json
+    Write-HookLog "Received Codex event: $([string]$event.type)."
 } catch {
-    Write-HookLog "Invalid Codex event JSON: $($_.Exception.Message)"
+    Write-HookLog "Invalid Codex event JSON: $($_.Exception.Message) PayloadLength=$($rawEvent.Length)"
     exit 0
 }
 
 $eventType = [string]$event.type
 if (-not [string]::IsNullOrWhiteSpace($eventType) -and
     $eventType -ne "agent-turn-complete") {
+    Write-HookLog "Ignored Codex event: $eventType."
     exit 0
 }
 
@@ -109,6 +123,9 @@ $lastMessage
     Write-HookLog "Feishu notification sent."
 } catch {
     Write-HookLog "Notification failed: $($_.Exception.Message)"
+    if ($env:CODEX_QUOTA_TEST_MODE -eq "1") {
+        exit 1
+    }
 }
 
 exit 0

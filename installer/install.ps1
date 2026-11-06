@@ -39,7 +39,7 @@ if (-not [string]::IsNullOrWhiteSpace($desktopPath)) {
 $uninstallKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\CodexQuotaMonitor"
 New-Item -Path $uninstallKey -Force | Out-Null
 New-ItemProperty -Path $uninstallKey -Name "DisplayName" -Value "Codex 账号额度状态栏监控工具" -PropertyType String -Force | Out-Null
-New-ItemProperty -Path $uninstallKey -Name "DisplayVersion" -Value "0.3.1" -PropertyType String -Force | Out-Null
+New-ItemProperty -Path $uninstallKey -Name "DisplayVersion" -Value "0.3.2" -PropertyType String -Force | Out-Null
 New-ItemProperty -Path $uninstallKey -Name "Publisher" -Value "sorry-every" -PropertyType String -Force | Out-Null
 New-ItemProperty -Path $uninstallKey -Name "InstallLocation" -Value $installDir -PropertyType String -Force | Out-Null
 New-ItemProperty -Path $uninstallKey -Name "DisplayIcon" -Value $exePath -PropertyType String -Force | Out-Null

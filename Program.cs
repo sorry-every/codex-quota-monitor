@@ -689,7 +689,7 @@ namespace CodexQuotaMonitor
             {
                 string testText = "Codex 飞书通知测试\n时间：" +
                     DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.CurrentCulture);
-                await FeishuNotifier.SendTextAsync(webhook, testText);
+                await FeishuNotifier.SendHookTestAsync(webhook);
                 _feishuStatusLabel.Text = "测试消息已发送，请查看飞书群。";
                 _notifyIcon.ShowBalloonTip(2500, "测试成功", "飞书已经收到测试消息。", ToolTipIcon.Info);
             }
@@ -1196,6 +1196,52 @@ namespace CodexQuotaMonitor
             });
         }
 
+        public static Task SendHookTestAsync(string webhook)
+        {
+            return Task.Run(delegate
+            {
+                SaveAndEnable(webhook);
+                string powerShellPath = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.System),
+                    "WindowsPowerShell\\v1.0\\powershell.exe");
+                if (!File.Exists(powerShellPath)) powerShellPath = "powershell.exe";
+
+                Dictionary<string, object> testEvent = new Dictionary<string, object>();
+                testEvent["type"] = "agent-turn-complete";
+                testEvent["turn-id"] = "codex-quota-monitor-test";
+                testEvent["input-messages"] = new[] { "Codex Quota Monitor 通知链路测试" };
+                testEvent["last-assistant-message"] = "这是一条通过 Codex notify 回调脚本发送的测试消息。";
+
+                ProcessStartInfo startInfo = new ProcessStartInfo();
+                startInfo.FileName = powerShellPath;
+                startInfo.Arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File " + QuoteProcessArgument(HookPath);
+                startInfo.UseShellExecute = false;
+                startInfo.CreateNoWindow = true;
+                startInfo.RedirectStandardError = true;
+                startInfo.EnvironmentVariables["CODEX_QUOTA_TEST_EVENT"] = Serializer.Serialize(testEvent);
+                startInfo.EnvironmentVariables["CODEX_QUOTA_TEST_MODE"] = "1";
+
+                using (Process process = Process.Start(startInfo))
+                {
+                    if (!process.WaitForExit(15000))
+                    {
+                        try { process.Kill(); } catch { }
+                        throw new InvalidOperationException("通知脚本超过 15 秒没有返回。");
+                    }
+                    string error = process.StandardError.ReadToEnd();
+                    if (process.ExitCode != 0)
+                    {
+                        throw new InvalidOperationException("通知脚本发送失败。" + error);
+                    }
+                }
+            });
+        }
+
+        private static string QuoteProcessArgument(string value)
+        {
+            return "\"" + value.Replace("\"", "\\\"") + "\"";
+        }
+
         private static string ReadWebhookFrom(string path)
         {
             if (!File.Exists(path))
@@ -1235,8 +1281,16 @@ namespace CodexQuotaMonitor
 
             string cleaned = RemoveNotifySetting(content);
             string hookPathForToml = HookPath.Replace("\\", "/").Replace("\"", "\\\"");
+            string powerShellPath = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.System),
+                "WindowsPowerShell\\v1.0\\powershell.exe");
+            if (!File.Exists(powerShellPath))
+            {
+                powerShellPath = "powershell.exe";
+            }
+            string powerShellPathForToml = powerShellPath.Replace("\\", "/").Replace("\"", "\\\"");
             string notifyLine =
-                "notify = [\"powershell.exe\", \"-NoProfile\", \"-ExecutionPolicy\", \"Bypass\", \"-File\", \"" +
+                "notify = [\"" + powerShellPathForToml + "\", \"-NoProfile\", \"-NonInteractive\", \"-ExecutionPolicy\", \"Bypass\", \"-File\", \"" +
                 hookPathForToml + "\"]";
             string updated = notifyLine + Environment.NewLine + cleaned.TrimStart();
             File.WriteAllText(codexConfig, updated + Environment.NewLine, new UTF8Encoding(false));
